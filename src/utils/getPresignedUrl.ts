@@ -14,7 +14,7 @@ const s3 = new S3Client({
 export async function getPresignedUrl(srcKey: string) {
 	const getUrl = await getSignedUrl(
 		s3,
-		new GetObjectCommand({ Bucket: env.UNSANITIZED_BUCKET_NAME, Key: srcKey }),
+		new GetObjectCommand({ Bucket: env.RAW_BUCKET_NAME, Key: srcKey }),
 		{ expiresIn: 3600 }, // Valid for 1 hour
 	);
 	return getUrl;

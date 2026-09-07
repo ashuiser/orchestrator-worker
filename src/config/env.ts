@@ -7,7 +7,7 @@ export const reqEnvVarsSchema = z.object({
 	S3_ENDPOINT: z.url(),
 	S3_ACCESS_KEY_ID: z.string(),
 	S3_SECRET_ACCESS_KEY: z.string(),
-	UNSANITIZED_BUCKET_NAME: z.string(),
+	RAW_BUCKET_NAME: z.string(),
 	ORCHESTRATOR_QUEUE_URL: z.url(),
 	TRANSCODER_QUEUE_URL: z.url(),
 	THUMBNAIL_QUEUE_URL: z.url(),
