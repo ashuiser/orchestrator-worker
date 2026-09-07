@@ -19,10 +19,11 @@ export const supportedMediaTypes = [
 
 export type TSupportedMediaTypes = (typeof supportedMediaTypes)[number];
 
-export type TReceivedMessageBody = {
-	event: string;
-	mediaId: string;
-};
+// Receive only mediaId get rest data from db/cache
+// export type TReceivedMessageBody = {
+// 	event: string;
+// 	mediaId: string;
+// };
 
 export type TTranscodeMessage = {
 	mediaId: string;

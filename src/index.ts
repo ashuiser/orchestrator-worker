@@ -11,7 +11,7 @@ import { db } from "./db/index.js";
 import { mediaTable } from "./db/schema.js";
 import type {
 	TMediaType,
-	TReceivedMessageBody,
+	// TReceivedMessageBody,
 	TTranscodeMessage,
 } from "./types/messageTypes.js";
 import { getKeyframes, selectKeyframes } from "./utils/ffprobe.js";
@@ -60,16 +60,23 @@ async function main() {
 		message.ReceiptHandle as string,
 	);
 
-	const parsedBody = message.Body
-		? (JSON.parse(message.Body) as TReceivedMessageBody)
-		: null;
+	// const parsedBody = message.Body
+	// 	? (JSON.parse(message.Body) as TReceivedMessageBody)
+	// 	: null;
 
-	if (!parsedBody) return;
+	// if (!parsedBody) return;
 
-	const { event, mediaId } = parsedBody;
+	// const { event, mediaId } = parsedBody;
 
-	if (event !== "media.uploaded") {
-		console.log("Invalid event: ", event);
+	// if (event !== "media.uploaded") {
+	// 	console.log("Invalid event: ", event);
+	// 	return;
+	// }
+
+	const mediaId = message.Body;
+
+	if (!mediaId) {
+		console.error("Invalid event (No mediaId received): ", message.Body);
 		return;
 	}
 
