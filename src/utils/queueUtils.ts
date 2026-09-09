@@ -6,12 +6,7 @@ import {
 	SQSClient,
 } from "@aws-sdk/client-sqs";
 import { env } from "../config/env.js";
-import type { TTranscodeMessage } from "../types/messageTypes.js";
-
-type TTranscodeMessageState = {
-	message: TTranscodeMessage;
-	index: string;
-};
+import type { TChunkTranscodeMessage } from "../types/messageTypes.js";
 
 const client = new SQSClient({ region: env.AWS_REGION });
 
@@ -53,37 +48,35 @@ export function keepVisibilityTimeout(
 	};
 }
 
-export async function sendSingleMessage(
-	queueUrl: string,
-	message: Record<string, unknown>,
-) {
+export async function sendSingleMessage(queueUrl: string, message: string) {
 	const command = new SendMessageCommand({
 		QueueUrl: queueUrl,
-		MessageBody: JSON.stringify(message),
+		MessageBody: message,
 	});
 	await client.send(command);
 }
 
 export async function sendBatchMessage(
 	queueUrl: string,
-	messages: TTranscodeMessage[],
+	messages: TChunkTranscodeMessage[],
 	batchSize = 10,
 	concurrency = 5,
 	maxRetries = 3,
-	beforeBatchSend?: (batch: TTranscodeMessage[]) => Promise<TTranscodeMessage[]>,
-	onBatchSuccess?: (successfulMessages: TTranscodeMessage[]) => Promise<void>,
+	beforeBatchSend?: (
+		batch: TChunkTranscodeMessage[],
+	) => Promise<TChunkTranscodeMessage[]>,
+	onBatchSuccess?: (
+		successfulMessages: TChunkTranscodeMessage[],
+	) => Promise<void>,
 ) {
 	if (batchSize > 10) {
 		throw new Error("Batch size cannot be greater than 10");
 	}
-	const pending = messages.map((message, index) => ({
-		message,
-		index: String(index),
-	}));
+	const pending = [...messages];
 
 	const retryMap = new Map<string, number>();
 
-	const permanentlyFailed: TTranscodeMessageState[] = [];
+	const permanentlyFailed: TChunkTranscodeMessage[] = [];
 
 	let cursor = 0;
 
@@ -94,9 +87,7 @@ export async function sendBatchMessage(
 
 		let batch = rawBatch;
 		if (beforeBatchSend) {
-			const batchMessages = rawBatch.map((item) => item.message);
-			const filteredMessages = await beforeBatchSend(batchMessages);
-			batch = rawBatch.filter((item) => filteredMessages.includes(item.message));
+			batch = await beforeBatchSend(rawBatch);
 		}
 
 		if (batch.length === 0) return;
@@ -106,18 +97,18 @@ export async function sendBatchMessage(
 				QueueUrl: queueUrl,
 				Entries: [
 					...batch.map((item) => ({
-						Id: String(item.index),
-						MessageBody: JSON.stringify(item.message),
+						Id: String(item.chunkIdx),
+						MessageBody: JSON.stringify(item),
 					})),
 				],
 			});
 			const result = await client.send(command);
 
 			if (result.Successful && result.Successful.length > 0 && onBatchSuccess) {
-				const successfulMessages = result.Successful.map(
-					(res) => batch.find((item) => item.index === res.Id)?.message,
-				).filter(Boolean) as TTranscodeMessage[];
-				
+				const successfulMessages = result.Successful.map((res) =>
+					batch.find((item) => item.chunkIdx === Number(res.Id)),
+				).filter(Boolean) as TChunkTranscodeMessage[];
+
 				if (successfulMessages.length > 0) {
 					await onBatchSuccess(successfulMessages);
 				}
@@ -127,7 +118,7 @@ export async function sendBatchMessage(
 				for (const failedMessageRes of result.Failed) {
 					const retryCnt = retryMap.get(failedMessageRes.Id as string) || 0;
 					const failedMessage = batch.find(
-						(item) => item.index === failedMessageRes.Id,
+						(item) => item.chunkIdx === Number(failedMessageRes.Id),
 					);
 					if (!failedMessage) {
 						console.error(
@@ -137,7 +128,7 @@ export async function sendBatchMessage(
 						continue;
 					}
 					if (retryCnt < maxRetries) {
-						retryMap.set(failedMessage.index, retryCnt + 1);
+						retryMap.set(String(failedMessage.chunkIdx), retryCnt + 1);
 						pending.push(failedMessage);
 					} else {
 						permanentlyFailed.push(failedMessage);
@@ -148,9 +139,9 @@ export async function sendBatchMessage(
 			// Entire batch request failed.
 			console.error("Entire batch message failed to send", err);
 			for (const failedMessage of batch) {
-				const retryCnt = retryMap.get(failedMessage.index) || 0;
+				const retryCnt = retryMap.get(String(failedMessage.chunkIdx)) || 0;
 				if (retryCnt < maxRetries) {
-					retryMap.set(failedMessage.index, retryCnt + 1);
+					retryMap.set(String(failedMessage.chunkIdx), retryCnt + 1);
 					pending.push(failedMessage);
 				} else {
 					permanentlyFailed.push(failedMessage);

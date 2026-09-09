@@ -4,15 +4,20 @@ import {
 	SQSClient,
 } from "@aws-sdk/client-sqs";
 import "dotenv/config";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { env } from "./config/env.js";
 import redisClient from "./config/redis.js";
 import { db } from "./db/index.js";
-import { mediaTable } from "./db/schema.js";
+import {
+	mediaTable,
+	transcodeTrackerChunksTable,
+	transcodeTrackerHeadTable,
+} from "./db/schema.js";
 import type {
+	TChunkTranscodeMessage,
+	TInitTranscodeMessage,
 	TMediaType,
 	// TReceivedMessageBody,
-	TTranscodeMessage,
 } from "./types/messageTypes.js";
 import { getKeyframes, selectKeyframes } from "./utils/ffprobe.js";
 import { getPresignedUrl } from "./utils/getPresignedUrl.js";
@@ -33,7 +38,7 @@ const receiveCommandInput: ReceiveMessageCommandInput = {
 
 const receiveCommand = new ReceiveMessageCommand(receiveCommandInput);
 
-const videoCodecs = ["av1", "h264"];
+const videoCodecs = ["av1", "h.264"];
 
 function getTranscodeTiers(width: number, height: number) {
 	const tiers = [360, 480, 720, 1080, 1440, 2160];
@@ -99,6 +104,7 @@ async function main() {
 				height: mediaTable.height,
 				width: mediaTable.width,
 				duration: mediaTable.duration,
+				ownerId: mediaTable.owner_id,
 			})
 			.from(mediaTable)
 			.where(eq(mediaTable.id, mediaId));
@@ -123,10 +129,7 @@ async function main() {
 			const isThumbPushed = await redisClient.get(thumbJobKey);
 
 			if (!isThumbPushed) {
-				await sendSingleMessage(env.THUMBNAIL_QUEUE_URL, {
-					event: "media.uploaded",
-					mediaId,
-				});
+				await sendSingleMessage(env.THUMBNAIL_QUEUE_URL, mediaId);
 				await redisClient.set(thumbJobKey, "pushed", { EX: 345600 }); // 4 days TTL
 
 				console.log("Thumnail job created.");
@@ -135,7 +138,7 @@ async function main() {
 			}
 		}
 	} catch (error) {
-		console.log("Error: ", error);
+		console.log("Error creating thumbnail job: ", error);
 		return;
 	}
 
@@ -182,10 +185,12 @@ async function main() {
 			console.log("Processing for codec: ", codec);
 			for (const tier of transcodeTiers) {
 				console.log("Processing for tier: ", tier);
-				const messages: TTranscodeMessage[] = [];
+				const messages: TChunkTranscodeMessage[] = [];
 				for (let i = 0; i < selectedKeyframes.length - 1; i++) {
 					messages.push({
+						type: "CHUNK",
 						mediaId: mediaId,
+						chunkIdx: i,
 						start: selectedKeyframes[i] as number,
 						end: selectedKeyframes[i + 1] as number,
 						res: tier, // smallest side dimension
@@ -197,16 +202,87 @@ async function main() {
 					selectedKeyframes.length - 1
 				] as number;
 
-				if (lastKeyFrame + env.MIN_INTERVAL < duration) {
-					(messages[messages.length - 1] as TTranscodeMessage).end = duration;
+				if (duration - lastKeyFrame < env.MIN_INTERVAL) {
+					(messages[messages.length - 1] as TChunkTranscodeMessage).end =
+						duration;
 				} else {
 					messages.push({
+						type: "CHUNK",
 						mediaId: mediaId,
+						chunkIdx: selectedKeyframes.length - 1,
 						start: lastKeyFrame,
 						end: duration,
 						res: tier,
 						videoCodec: codec,
 					});
+				}
+
+				// Update tracker
+				const chunkCount = messages.length;
+				await db
+					.insert(transcodeTrackerHeadTable)
+					.values({
+						media_id: mediaId,
+						total_chunks: chunkCount,
+					})
+					.onConflictDoUpdate({
+						target: [transcodeTrackerHeadTable.media_id],
+						set: {
+							total_chunks: chunkCount,
+							created_at: sql`now()`,
+						},
+					});
+				await db
+					.insert(transcodeTrackerChunksTable)
+					.values([
+						...messages.map((m) => {
+							return {
+								media_id: m.mediaId,
+								chunk_idx: m.chunkIdx,
+								codec: m.videoCodec,
+								resolution: m.res,
+							};
+						}),
+						{
+							media_id: mediaId,
+							chunk_idx: -1,
+							codec: codec,
+							resolution: tier,
+						},
+					])
+					.onConflictDoUpdate({
+						target: [
+							transcodeTrackerChunksTable.media_id,
+							transcodeTrackerChunksTable.chunk_idx,
+							transcodeTrackerChunksTable.codec,
+							transcodeTrackerChunksTable.resolution,
+						],
+						set: {
+							created_at: sql`now()`,
+							updated_at: sql`now()`,
+						},
+					});
+
+				// Create init job
+				const initJobKey = `fotto:job:init:${mediaId}:${codec}:${tier}`;
+				const isInitPushed = await redisClient.get(initJobKey);
+
+				if (!isInitPushed) {
+					const initMessage: TInitTranscodeMessage = {
+						type: "INIT",
+						mediaId,
+						res: tier,
+						videoCodec: codec,
+					};
+					await sendSingleMessage(
+						env.TRANSCODER_QUEUE_URL,
+						JSON.stringify(initMessage),
+					);
+					await redisClient.set(initJobKey, "pushed", { EX: 345600 }); // 4 days TTL
+
+					console.log("Init job created.");
+				} else {
+					console.log("Init job already created.");
 				}
 
 				const failed = await sendBatchMessage(
@@ -218,7 +294,7 @@ async function main() {
 					async (batch) => {
 						const keys = batch.map(
 							(m) =>
-								`fotto:job:transcode:${m.mediaId}:${m.videoCodec}:${m.res}:${m.start}:${m.end}`,
+								`fotto:job:transcode:${m.mediaId}:${m.videoCodec}:${m.res}:${m.chunkIdx}`,
 						);
 						const existing = await redisClient.mGet(keys);
 						return batch.filter((_, idx) => !existing[idx]);
@@ -227,7 +303,7 @@ async function main() {
 						if (successfulMessages.length === 0) return;
 						const pipeline = redisClient.multi();
 						for (const m of successfulMessages) {
-							const key = `fotto:job:transcode:${m.mediaId}:${m.videoCodec}:${m.res}:${m.start}:${m.end}`;
+							const key = `fotto:job:transcode:${m.mediaId}:${m.videoCodec}:${m.res}:${m.chunkIdx}`;
 							pipeline.set(key, "pushed", { EX: 345600 });
 						}
 						await pipeline.exec();

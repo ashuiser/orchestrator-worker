@@ -25,14 +25,22 @@ export type TSupportedMediaTypes = (typeof supportedMediaTypes)[number];
 // 	mediaId: string;
 // };
 
-export type TTranscodeMessage = {
+export type TChunkTranscodeMessage = {
+	type: "CHUNK";
 	mediaId: string;
+	chunkIdx: number;
 	start: number;
 	end: number;
 	res: number;
-	videoCodec: string | undefined;
+	videoCodec: string;
 };
-
+export type TInitTranscodeMessage = {
+	type: "INIT";
+	mediaId: string;
+	res: number;
+	videoCodec: string;
+};
+export type TTranscodeMessage = TInitTranscodeMessage | TChunkTranscodeMessage;
 export type TMediaType = {
 	fileType:
 		| "image/jpeg"
@@ -49,4 +57,5 @@ export type TMediaType = {
 	height: number;
 	width: number;
 	duration: number;
+	ownerId: number;
 };

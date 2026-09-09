@@ -5,6 +5,12 @@ export function getKeyframes(inputVideoPath: string) {
 		console.log("starting ffprobe analysis.");
 
 		const ffprobe = spawn("ffprobe", [
+			"-reconnect",
+			"1",
+			"-reconnect_streamed",
+			"1",
+			"-reconnect_delay_max",
+			"5",
 			"-v",
 			"error",
 			"-select_streams",
@@ -19,6 +25,7 @@ export function getKeyframes(inputVideoPath: string) {
 		]);
 
 		let buffer = "";
+		let stderrOutput = "";
 		const keyframes: number[] = [];
 
 		ffprobe.stdout.on("data", (chunk) => {
@@ -38,12 +45,22 @@ export function getKeyframes(inputVideoPath: string) {
 
 		// log FFprobe errors
 		ffprobe.stderr.on("data", (chunk) => {
-			console.error(chunk.toString());
+			const text = chunk.toString();
+			stderrOutput += text;
+			console.error(text);
 		});
 
 		ffprobe.on("close", (code) => {
-			if (code !== 0) {
-				reject(new Error(`ffprobe exited with code ${code}`));
+			const looksTruncated =
+				/partial file|IO error|pull function|Error number -\d+/i.test(
+					stderrOutput,
+				);
+			if (code !== 0 || looksTruncated) {
+				reject(
+					new Error(
+						`ffprobe read was incomplete (code=${code}): ${stderrOutput || "no stderr"}`,
+					),
+				);
 				return;
 			}
 

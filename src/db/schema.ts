@@ -169,3 +169,39 @@ export const albumMediaTable = pgTable(
 		}).onDelete("cascade"),
 	],
 );
+
+export const transcodeTrackerHeadTable = pgTable("transcode_tracker_head", {
+	media_id: varchar({ length: 26 })
+		.primaryKey()
+		.references(() => mediaTable.id, {
+			onDelete: "cascade",
+		}),
+	total_chunks: integer().notNull(),
+	created_at: timestamp({ mode: "date", withTimezone: true })
+		.defaultNow()
+		.notNull(),
+});
+
+export const transcodeTrackerChunksTable = pgTable(
+	"transcode_tracker_chunks",
+	{
+		media_id: varchar({ length: 26 }).references(() => mediaTable.id, {
+			onDelete: "cascade",
+		}),
+		chunk_idx: integer().notNull(),
+		codec: varchar({ length: 5 }).notNull(),
+		resolution: integer().notNull(),
+		status: boolean().default(false).notNull(),
+		created_at: timestamp({ mode: "date", withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updated_at: timestamp({ mode: "date", withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [table.media_id, table.chunk_idx, table.codec, table.resolution],
+		}),
+	],
+);
