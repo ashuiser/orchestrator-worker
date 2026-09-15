@@ -53,7 +53,7 @@ export type TMediaType = {
 		| "video/webm";
 	srcKey: string;
 	thumbKey: string | null;
-	status: "UPLOADING" | "PROCESSING" | "READY" | "FAILED";
+	status: "UPLOADING" | "UPLOADED" | "PROCESSING" | "READY" | "FAILED";
 	height: number;
 	width: number;
 	duration: number;

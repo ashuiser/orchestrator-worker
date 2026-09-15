@@ -4,6 +4,7 @@ import {
 	date,
 	foreignKey,
 	integer,
+	numeric,
 	pgEnum,
 	pgTable,
 	primaryKey,
@@ -14,6 +15,7 @@ import {
 
 export const mediaStatusEnum = pgEnum("media_status", [
 	"UPLOADING",
+	"UPLOADED",
 	"PROCESSING",
 	"READY",
 	"FAILED",
@@ -94,7 +96,7 @@ export const mediaTable = pgTable(
 			.defaultNow()
 			.notNull(),
 	},
-	(table) => [unique().on(table.id, table.owner_id)],
+	(table) => [unique("media_id_owner_id_unique").on(table.id, table.owner_id)],
 );
 
 // Upload Session Table
@@ -170,28 +172,16 @@ export const albumMediaTable = pgTable(
 	],
 );
 
-export const transcodeTrackerHeadTable = pgTable("transcode_tracker_head", {
-	media_id: varchar({ length: 26 })
-		.primaryKey()
-		.references(() => mediaTable.id, {
-			onDelete: "cascade",
-		}),
-	total_chunks: integer().notNull(),
-	created_at: timestamp({ mode: "date", withTimezone: true })
-		.defaultNow()
-		.notNull(),
-});
-
-export const transcodeTrackerChunksTable = pgTable(
-	"transcode_tracker_chunks",
+export const transcodeTrackerHeadTable = pgTable(
+	"transcode_tracker_head",
 	{
 		media_id: varchar({ length: 26 }).references(() => mediaTable.id, {
 			onDelete: "cascade",
 		}),
-		chunk_idx: integer().notNull(),
-		codec: varchar({ length: 5 }).notNull(),
+		video_codec: varchar({ length: 5 }).notNull(),
 		resolution: integer().notNull(),
-		status: boolean().default(false).notNull(),
+		height: integer(),
+		width: integer(),
 		created_at: timestamp({ mode: "date", withTimezone: true })
 			.defaultNow()
 			.notNull(),
@@ -201,7 +191,47 @@ export const transcodeTrackerChunksTable = pgTable(
 	},
 	(table) => [
 		primaryKey({
-			columns: [table.media_id, table.chunk_idx, table.codec, table.resolution],
+			columns: [table.media_id, table.video_codec, table.resolution],
 		}),
+	],
+);
+
+export const transcodeTrackerChunksTable = pgTable(
+	"transcode_tracker_chunks",
+	{
+		media_id: varchar({ length: 26 }).references(() => mediaTable.id, {
+			onDelete: "cascade",
+		}),
+		video_codec: varchar({ length: 5 }).notNull(),
+		resolution: integer().notNull(),
+		chunk_idx: integer().notNull(),
+		start: numeric({ precision: 15, scale: 7, mode: "number" }).notNull(),
+		end: numeric({ precision: 15, scale: 7, mode: "number" }).notNull(),
+		status: boolean().default(false).notNull(),
+		max_bitrate: integer(),
+		created_at: timestamp({ mode: "date", withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updated_at: timestamp({ mode: "date", withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(table) => [
+		primaryKey({
+			columns: [
+				table.media_id,
+				table.chunk_idx,
+				table.video_codec,
+				table.resolution,
+			],
+		}),
+		foreignKey({
+			columns: [table.media_id, table.video_codec, table.resolution],
+			foreignColumns: [
+				transcodeTrackerHeadTable.media_id,
+				transcodeTrackerHeadTable.video_codec,
+				transcodeTrackerHeadTable.resolution,
+			],
+		}).onDelete("cascade"),
 	],
 );

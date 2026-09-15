@@ -119,7 +119,21 @@ async function main() {
 		return;
 	}
 
-	const { fileType, status, srcKey, thumbKey, height, width, duration } = media;
+	await db
+		.update(mediaTable)
+		.set({ status: "PROCESSING", updated_at: sql`now()` })
+		.where(eq(mediaTable.id, mediaId));
+
+	const {
+		fileType,
+		status,
+		srcKey,
+		thumbKey,
+		height,
+		width,
+		duration: durationMs,
+	} = media; // Duration is in ms
+	const duration = durationMs / 1000; // Duration in seconds
 
 	console.log("Creating thumnail job.");
 
@@ -218,18 +232,22 @@ async function main() {
 				}
 
 				// Update tracker
-				const chunkCount = messages.length;
 				await db
 					.insert(transcodeTrackerHeadTable)
 					.values({
 						media_id: mediaId,
-						total_chunks: chunkCount,
+						video_codec: codec,
+						resolution: tier,
 					})
 					.onConflictDoUpdate({
-						target: [transcodeTrackerHeadTable.media_id],
+						target: [
+							transcodeTrackerHeadTable.media_id,
+							transcodeTrackerHeadTable.video_codec,
+							transcodeTrackerHeadTable.resolution,
+						],
 						set: {
-							total_chunks: chunkCount,
 							created_at: sql`now()`,
+							updated_at: sql`now()`,
 						},
 					});
 				await db
@@ -239,22 +257,26 @@ async function main() {
 							return {
 								media_id: m.mediaId,
 								chunk_idx: m.chunkIdx,
-								codec: m.videoCodec,
+								video_codec: m.videoCodec,
 								resolution: m.res,
+								start: m.start,
+								end: m.end,
 							};
 						}),
 						{
 							media_id: mediaId,
 							chunk_idx: -1,
-							codec: codec,
+							video_codec: codec,
 							resolution: tier,
+							start: 0, // As init.mp4 chunk only contains metadata
+							end: 0,
 						},
 					])
 					.onConflictDoUpdate({
 						target: [
 							transcodeTrackerChunksTable.media_id,
 							transcodeTrackerChunksTable.chunk_idx,
-							transcodeTrackerChunksTable.codec,
+							transcodeTrackerChunksTable.video_codec,
 							transcodeTrackerChunksTable.resolution,
 						],
 						set: {
